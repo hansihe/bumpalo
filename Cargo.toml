@@ -35,8 +35,7 @@ rand = "0.7"
 
 [features]
 default = []
-collections = []
-boxed = []
+nightly = []
 
 # [profile.bench]
 # debug = true
