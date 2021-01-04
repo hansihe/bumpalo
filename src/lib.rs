@@ -1173,9 +1173,9 @@ fn oom() -> ! {
     panic!("out of memory")
 }
 
-unsafe impl alloc::AllocRef for Bump {
+unsafe impl alloc::Allocator for Bump {
     #[inline(always)]
-    fn alloc(
+    fn allocate(
         &self,
         layout: Layout,
     ) -> Result<NonNull<[u8]>, alloc::AllocError> {
@@ -1186,7 +1186,7 @@ unsafe impl alloc::AllocRef for Bump {
     }
 
     #[inline]
-    unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout) {
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         // If the pointer is the last allocation we made, we can reuse the bytes,
         // otherwise they are simply leaked -- at least until somebody calls reset().
         if self.is_last_allocation(ptr) {
@@ -1207,7 +1207,7 @@ unsafe impl alloc::AllocRef for Bump {
         let delta = new_size - old_size;
 
         if old_size == 0 {
-            return alloc::AllocRef::alloc(self, layout);
+            return alloc::Allocator::allocate(self, layout);
         }
 
         debug_assert!(
@@ -1285,7 +1285,7 @@ mod tests {
     #[test]
     #[allow(clippy::cognitive_complexity)]
     fn test_realloc() {
-        use crate::alloc::AllocRef;
+        use crate::alloc::Allocator;
 
         unsafe {
             const CAPACITY: usize = 1024 - OVERHEAD;
@@ -1338,16 +1338,16 @@ mod tests {
 
     #[test]
     fn invalid_read() {
-        use alloc::AllocRef;
+        use alloc::Allocator;
 
         let b = &Bump::new();
 
         unsafe {
             let l1 = Layout::from_size_align(12000, 4).unwrap();
-            let p1 = AllocRef::alloc(b, l1).unwrap().as_non_null_ptr();
+            let p1 = Allocator::allocate(b, l1).unwrap().as_non_null_ptr();
 
             let l2 = Layout::from_size_align(1000, 4).unwrap();
-            AllocRef::alloc(b, l2).unwrap();
+            Allocator::allocate(b, l2).unwrap();
 
             let l3 = Layout::from_size_align(24000, 4).unwrap();
             let p1 = b.grow(p1, l1, l3).unwrap().as_non_null_ptr();

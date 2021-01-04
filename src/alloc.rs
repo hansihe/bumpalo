@@ -17,16 +17,16 @@
 use core::mem;
 use core::usize;
 
-pub use core::alloc::{Layout, LayoutErr};
+pub use core::alloc::{Layout, LayoutError};
 
-fn new_layout_err() -> LayoutErr {
+fn new_layout_err() -> LayoutError {
     Layout::from_size_align(1, 3).unwrap_err()
 }
 
 pub trait UnstableLayoutMethods {
     fn padding_needed_for(&self, align: usize) -> usize;
-    fn repeat(&self, n: usize) -> Result<(Layout, usize), LayoutErr>;
-    fn array<T>(n: usize) -> Result<Layout, LayoutErr>;
+    fn repeat(&self, n: usize) -> Result<(Layout, usize), LayoutError>;
+    fn array<T>(n: usize) -> Result<Layout, LayoutError>;
 }
 
 impl UnstableLayoutMethods for Layout {
@@ -56,7 +56,7 @@ impl UnstableLayoutMethods for Layout {
         len_rounded_up.wrapping_sub(len)
     }
 
-    fn repeat(&self, n: usize) -> Result<(Layout, usize), LayoutErr> {
+    fn repeat(&self, n: usize) -> Result<(Layout, usize), LayoutError> {
         let padded_size = self
             .size()
             .checked_add(self.padding_needed_for(self.align()))
@@ -73,7 +73,7 @@ impl UnstableLayoutMethods for Layout {
         }
     }
 
-    fn array<T>(n: usize) -> Result<Layout, LayoutErr> {
+    fn array<T>(n: usize) -> Result<Layout, LayoutError> {
         Layout::new::<T>().repeat(n).map(|(k, offs)| {
             debug_assert!(offs == mem::size_of::<T>());
             k
@@ -83,7 +83,7 @@ impl UnstableLayoutMethods for Layout {
 
 #[cfg(feature = "nightly")]
 pub use core_alloc::alloc::{
-    handle_alloc_error, AllocError, AllocRef,
+    handle_alloc_error, AllocError, Allocator,
 };
 
 #[cfg(not(feature = "nightly"))]
@@ -95,7 +95,7 @@ mod shim {
     use core::fmt;
     use core::ptr::{self, NonNull};
 
-    pub use core::alloc::{Layout, LayoutErr};
+    pub use core::alloc::{Layout, LayoutError};
 
     pub fn handle_alloc_error(layout: Layout) -> ! {
         panic!("encountered allocation error: {:?}", layout)
@@ -117,14 +117,14 @@ mod shim {
         }
     }
 
-    /// An implementation of `AllocRef` can allocate, grow, shrink, and deallocate arbitrary blocks of
+    /// An implementation of `Allocator` can allocate, grow, shrink, and deallocate arbitrary blocks of
     /// data described via [`Layout`][].
     ///
-    /// `AllocRef` is designed to be implemented on ZSTs, references, or smart pointers because having
+    /// `Allocator` is designed to be implemented on ZSTs, references, or smart pointers because having
     /// an allocator like `MyAlloc([u8; N])` cannot be moved, without updating the pointers to the
     /// allocated memory.
     ///
-    /// Unlike [`GlobalAlloc`][], zero-sized allocations are allowed in `AllocRef`. If an underlying
+    /// Unlike [`GlobalAlloc`][], zero-sized allocations are allowed in `Allocator`. If an underlying
     /// allocator does not support this (like jemalloc) or return a null pointer (such as
     /// `libc::malloc`), this must be caught by the implementation.
     ///
@@ -141,10 +141,10 @@ mod shim {
     ///   [`shrink`] that returns `Ok`. If `grow` or `shrink` have returned `Err`, the passed pointer
     ///   remains valid.
     ///
-    /// [`alloc`]: AllocRef::alloc
-    /// [`grow`]: AllocRef::grow
-    /// [`shrink`]: AllocRef::shrink
-    /// [`dealloc`]: AllocRef::dealloc
+    /// [`alloc`]: Allocator::alloc
+    /// [`grow`]: Allocator::grow
+    /// [`shrink`]: Allocator::shrink
+    /// [`dealloc`]: Allocator::dealloc
     ///
     /// ### Memory fitting
     ///
@@ -174,7 +174,7 @@ mod shim {
     ///
     /// [*currently allocated*]: #currently-allocated-memory
     //#[unstable(feature = "allocator_api", issue = "32838")]
-    pub unsafe trait AllocRef {
+    pub unsafe trait Allocator {
         /// Attempts to allocate a block of memory.
         ///
         /// On success, returns a [`NonNull<[u8]>`][NonNull] meeting the size and alignment guarantees of `layout`.
@@ -195,7 +195,7 @@ mod shim {
         /// call the [`handle_alloc_error`] function, rather than directly invoking `panic!` or similar.
         ///
         /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
-        fn alloc(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
+        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
 
         /// Behaves like `alloc`, but also ensures that the returned memory is zero-initialized.
         ///
@@ -212,8 +212,8 @@ mod shim {
         /// call the [`handle_alloc_error`] function, rather than directly invoking `panic!` or similar.
         ///
         /// [`handle_alloc_error`]: ../../alloc/alloc/fn.handle_alloc_error.html
-        fn alloc_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-            let ptr = self.alloc(layout)?;
+        fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            let ptr = self.allocate(layout)?;
             // SAFETY: `alloc` returns a valid memory block
             unsafe { ptr.as_non_null_ptr().as_ptr().write_bytes(0, ptr.len()) }
             Ok(ptr)
@@ -228,7 +228,7 @@ mod shim {
         ///
         /// [*currently allocated*]: #currently-allocated-memory
         /// [*fit*]: #memory-fitting
-        unsafe fn dealloc(&self, ptr: NonNull<u8>, layout: Layout);
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout);
 
         /// Attempts to extend the memory block.
         ///
@@ -277,7 +277,7 @@ mod shim {
                 "`new_layout.size()` must be greater than or equal to `old_layout.size()`"
                 );
 
-            let new_ptr = self.alloc(new_layout)?;
+            let new_ptr = self.allocate(new_layout)?;
 
             // SAFETY: because `new_layout.size()` must be greater than or equal to
             // `old_layout.size()`, both the old and new memory allocation are valid for reads and
@@ -286,7 +286,7 @@ mod shim {
             // safe. The safety contract for `dealloc` must be upheld by the caller.
             unsafe {
                 ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_mut_ptr(), old_layout.size());
-                self.dealloc(ptr, old_layout);
+                self.deallocate(ptr, old_layout);
             }
 
             Ok(new_ptr)
@@ -338,7 +338,7 @@ mod shim {
                 "`new_layout.size()` must be greater than or equal to `old_layout.size()`"
                 );
 
-            let new_ptr = self.alloc_zeroed(new_layout)?;
+            let new_ptr = self.allocate_zeroed(new_layout)?;
 
             // SAFETY: because `new_layout.size()` must be greater than or equal to
             // `old_layout.size()`, both the old and new memory allocation are valid for reads and
@@ -347,7 +347,7 @@ mod shim {
             // safe. The safety contract for `dealloc` must be upheld by the caller.
             unsafe {
                 ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_mut_ptr(), old_layout.size());
-                self.dealloc(ptr, old_layout);
+                self.deallocate(ptr, old_layout);
             }
 
             Ok(new_ptr)
@@ -400,7 +400,7 @@ mod shim {
                 "`new_layout.size()` must be smaller than or equal to `old_layout.size()`"
                 );
 
-            let new_ptr = self.alloc(new_layout)?;
+            let new_ptr = self.allocate(new_layout)?;
 
             // SAFETY: because `new_layout.size()` must be lower than or equal to
             // `old_layout.size()`, both the old and new memory allocation are valid for reads and
@@ -409,15 +409,15 @@ mod shim {
             // safe. The safety contract for `dealloc` must be upheld by the caller.
             unsafe {
                 ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_mut_ptr(), new_layout.size());
-                self.dealloc(ptr, old_layout);
+                self.deallocate(ptr, old_layout);
             }
 
             Ok(new_ptr)
         }
 
-        /// Creates a "by reference" adaptor for this instance of `AllocRef`.
+        /// Creates a "by reference" adaptor for this instance of `Allocator`.
         ///
-        /// The returned adaptor also implements `AllocRef` and will simply borrow this.
+        /// The returned adaptor also implements `Allocator` and will simply borrow this.
         #[inline(always)]
         fn by_ref(&self) -> &Self {
             self
